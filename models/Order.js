@@ -13,6 +13,7 @@ const OrderSchema = new mongoose.Schema({
     // Pending: Khách đang ăn/gọi, Paid: Đã thanh toán xong
     status: { type: String, enum: ['pending', 'paid'], default: 'pending' },
     isTakeAway: { type: Boolean, default: false },
+    notes: { type: String, default: '' }, // Ghi chú từ khách
     createdAt: { type: Date, default: Date.now }
 });
 

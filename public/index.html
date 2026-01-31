@@ -509,6 +509,10 @@
                 <div style="display:flex; justify-content:space-between; font-size:1.2rem; font-weight:700; margin-bottom:10px;">
                     <span>Tổng:</span> <span id="modal-total" style="color:var(--primary)">0đ</span>
                 </div>
+                <div style="margin-bottom:15px;">
+                    <label style="display:block; font-size:0.9rem; font-weight:700; margin-bottom:6px; color:var(--text-dark);">Ghi chú thêm (tuỳ chọn)</label>
+                    <textarea id="order-notes" style="width:100%; padding:10px; border:1px solid #e2e8f0; border-radius:10px; font-family:inherit; font-size:0.95rem; resize:vertical; min-height:60px; outline:none;" placeholder="Ví dụ: Ít đá, không đường..."></textarea>
+                </div>
                 <button class="btn-order-confirm" onclick="sendOrder()">XÁC NHẬN GỌI MÓN</button>
             </div>
         </div>
@@ -616,17 +620,20 @@
             if(cart.length === 0) return;
             
             const total = cart.reduce((s, i) => s + (i.price * i.quantity), 0);
+            const notes = document.getElementById('order-notes').value.trim();
             
             // Gửi lên server
             socket.emit('send_order', { 
                 tableNumber: table, 
                 items: cart, 
-                totalAmount: total, 
+                totalAmount: total,
+                notes: notes, 
                 isTakeAway: (table === '0') // Nếu table là "0" thì đánh dấu là Mang về
             });
 
-            // 1. Reset Giỏ hàng
+            // 1. Reset Giỏ hàng & Notes
             cart = []; 
+            document.getElementById('order-notes').value = '';
             updateCartUI();
             toggleCart(); 
 

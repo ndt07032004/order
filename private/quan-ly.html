@@ -354,6 +354,7 @@
                 </div>
                 <div id="cart-list"></div>
                 <div class="cart-footer">
+                    <textarea id="admin-notes" placeholder="Thêm ghi chú cho đơn (ví dụ: Không cay, ít đá...)" style="width: 100%; padding: 10px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.9rem; font-family: inherit; resize: vertical; min-height: 50px; margin-bottom: 10px;"></textarea>
                     <div class="cart-total-row">
                         <span class="cart-total-label">Tổng thanh toán</span>
                         <span id="cart-total" class="cart-total-value">0đ</span>
@@ -555,7 +556,7 @@
     </div>
 </div>
 
-<audio id="beep" src="/beep.mp3"></audio>
+<audio id="beep" src="/assets/audio/beep.mp3">"></audio>
 
 <script>
     // --- SECURITY LOCK ---
@@ -961,7 +962,8 @@
                 </div>`;
         }).join('');
         // send invoiceCode to server so saved order can include the same code
-        socket.emit('pay_order', { tableNumber: currentTable.name, invoiceCode });
+        const notes = document.getElementById('admin-notes').value.trim();
+        socket.emit('pay_order', { tableNumber: currentTable.name, invoiceCode, notes });
         showToast("Thanh toán thành công! Đang in hóa đơn...");
         setTimeout(() => window.print(), 800);
     }
@@ -974,6 +976,7 @@
         
         if (hasItems && order.status !== 'deleted') {
             const tName = order.tableNumber == '0' ? '<i class="fa-solid fa-bag-shopping"></i> Mang Về' : `<i class="fa-solid fa-chair"></i> Bàn ${order.tableNumber}`;
+            const notesHtml = order.notes ? `<div style="background: #FEF3C7; padding: 10px; border-radius: 8px; margin-top: 10px; font-size: 0.9rem; border-left: 3px solid #D97706; color: #92400E; word-break: break-word; white-space: pre-wrap; max-height: 100px; overflow-y: auto;"><strong>📝 Ghi chú:</strong><br/>${order.notes}</div>` : '';
             const html = `
             <div id="order-${order._id}" class="order-card ${order.status}">
                 <div class="order-meta">
@@ -983,6 +986,7 @@
                 <div class="order-items">
                     ${order.items.filter(i=>i.quantity>0).map(i => `<div class="order-item-row"><span>${i.productName}</span> <span class="order-item-qty">x${i.quantity}</span></div>`).join('')}
                 </div>
+                ${notesHtml}
             </div>`;
             if (existing) existing.outerHTML = html;
             else if (order.status !== 'paid') document.getElementById('order-list').insertAdjacentHTML('afterbegin', html);

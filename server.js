@@ -235,6 +235,8 @@ io.on('connection', (socket) => {
                 } else {
                     // Tính lại tổng tiền
                     order.totalAmount = order.items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
+                    // Cập nhật ghi chú nếu có
+                    if (data.notes) order.notes = data.notes;
                     await order.save();
                 }
             } else {
@@ -245,6 +247,7 @@ io.on('connection', (socket) => {
                         tableNumber: data.tableNumber, // Lúc này đã là "0" nếu là mang về
                         items: data.items,
                         totalAmount: realTotal,
+                        notes: data.notes || '', // Lưu ghi chú khách hàng
                         isTakeAway: data.isTakeAway,
                         status: 'pending'
                     });
@@ -263,6 +266,8 @@ io.on('connection', (socket) => {
             // [QUAN TRỌNG] Khi thanh toán, Server tìm đúng bàn "0" hoặc bàn số để update
             const update = { status: 'paid', paidAt: new Date() };
             if (data.invoiceCode) update.invoiceCode = data.invoiceCode;
+            // Nếu admin thêm ghi chú thì cập nhật notes
+            if (data.notes) update.notes = data.notes;
 
             const order = await Order.findOneAndUpdate(
                 { tableNumber: data.tableNumber, status: 'pending' },
