@@ -34,8 +34,9 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 const authAdmin = (req, res, next) => {
-    if (req.session.isAdmin) return next();
-    // Thay vì báo lỗi 401, ta chuyển hướng người dùng về trang đăng nhập
+    // Require initial login and second-step password
+    if (req.session.isAdmin && req.session.passedSecondAuth) return next();
+    if (req.session.isAdmin && !req.session.passedSecondAuth) return res.redirect('/second-auth.html');
     res.redirect('/login.html');
 };
 
@@ -45,11 +46,49 @@ app.use('/private', authAdmin, express.static('private'));
 // --- ROUTES ---
 
 app.post('/api/login', (req, res) => {
-    if (req.body.password === process.env.ADMIN_PASS) {
+    // Hỗ trợ username + password; fallback mặc định nếu .env không có
+    const adminUser = process.env.ADMIN_USER || 'admin';
+    const adminPass = process.env.ADMIN_PASS || '666888';
+    const { username, password } = req.body;
+
+    if (username === adminUser && password === adminPass) {
+        // Gán quyền quản trị tạm thời; yêu cầu bước 2
         req.session.isAdmin = true;
+        req.session.passedSecondAuth = false;
+        return res.json({ success: true, needSecond: true });
+    }
+    res.json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu!' });
+});
+
+// Second-step password verification
+app.post('/api/second-auth', (req, res) => {
+    const provided = req.body.password;
+    const second = process.env.SECOND_PASS || '123456AZ';
+    if (!req.session.isAdmin) return res.status(401).json({ success: false, message: 'Chưa đăng nhập.' });
+    if (provided === second) {
+        req.session.passedSecondAuth = true;
         return res.json({ success: true });
     }
-    res.json({ success: false, message: 'Sai mật khẩu!' });
+    return res.json({ success: false, message: 'Mật khẩu bước 2 không đúng.' });
+});
+
+// Xác minh mã 2FA (TOTP)
+app.post('/api/2fa/verify', async (req, res) => {
+    try {
+        const { token } = req.body;
+        if (!req.session.pendingAdmin) return res.json({ success: false, message: 'Không có yêu cầu xác thực.' });
+        const secret = process.env.ADMIN_2FA_SECRET;
+        if (!secret) return res.status(500).json({ success: false, message: '2FA chưa được cấu hình trên server.' });
+
+        const verified = speakeasy.totp.verify({ secret, encoding: 'base32', token, window: 1 });
+        if (verified) {
+            req.session.isAdmin = true;
+            req.session.is2fa = true;
+            req.session.pendingAdmin = false;
+            return res.json({ success: true });
+        }
+        return res.json({ success: false, message: 'Mã 2FA không hợp lệ.' });
+    } catch (err) { console.error(err); res.status(500).json({ success: false }); }
 });
 
 // API cho Khách (Chỉ hiện Nước)
@@ -222,9 +261,12 @@ io.on('connection', (socket) => {
     socket.on('pay_order', async (data) => {
         try {
             // [QUAN TRỌNG] Khi thanh toán, Server tìm đúng bàn "0" hoặc bàn số để update
+            const update = { status: 'paid', paidAt: new Date() };
+            if (data.invoiceCode) update.invoiceCode = data.invoiceCode;
+
             const order = await Order.findOneAndUpdate(
                 { tableNumber: data.tableNumber, status: 'pending' },
-                { status: 'paid' },
+                update,
                 { new: true }
             );
             if (order) {
@@ -232,6 +274,15 @@ io.on('connection', (socket) => {
             }
         } catch (e) { console.error(e); }
     });
+});
+app.get('/api/orders/history', authAdmin, async (req, res) => {
+    try {
+        // Lấy 50 đơn gần nhất đã thanh toán, sắp xếp mới nhất lên đầu
+        const orders = await Order.find({ status: 'paid' })
+            .sort({ createdAt: -1 })
+            .limit(50);
+        res.json(orders);
+    } catch (err) { res.status(500).send(err.message); }
 });
 
 const PORT = process.env.PORT || 3000;

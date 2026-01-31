@@ -8,6 +8,8 @@ const OrderSchema = new mongoose.Schema({
         quantity: { type: Number, default: 1 }
     }],
     totalAmount: { type: Number, default: 0 },
+    invoiceCode: { type: String, default: '' },
+    paidAt: { type: Date },
     // Pending: Khách đang ăn/gọi, Paid: Đã thanh toán xong
     status: { type: String, enum: ['pending', 'paid'], default: 'pending' },
     isTakeAway: { type: Boolean, default: false },
