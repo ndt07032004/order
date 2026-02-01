@@ -11,21 +11,39 @@ const connectDB = require('./config/db');
 // Models
 const Order = require('./models/Order');
 const Product = require('./models/Product');
+const Account = require('./models/Account');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// Kết nối Database
 connectDB();
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// 1. Cấu hình Session
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'secret',
+    secret: process.env.SESSION_SECRET || 'secret_key_bat_ky',
     resave: false,
     saveUninitialized: true,
-    cookie: { maxAge: 24 * 60 * 60 * 1000 }
+    cookie: { maxAge: 24 * 60 * 60 * 1000 } // 24 giờ
 }));
+
+// 2. Middleware sửa lỗi bảo mật (CSP) để load font và icon
+app.use((req, res, next) => {
+    res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
+        "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://fonts.googleapis.com; " +
+        "font-src 'self' https://cdnjs.cloudflare.com https://fonts.gstatic.com; " +
+        "img-src 'self' data: https:; " +
+        "connect-src 'self'"
+    );
+    next();
+});
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => cb(null, 'public/uploads/'),
@@ -33,68 +51,81 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-const authAdmin = (req, res, next) => {
-    // Require initial login and second-step password
-    if (req.session.isAdmin && req.session.passedSecondAuth) return next();
-    if (req.session.isAdmin && !req.session.passedSecondAuth) return res.redirect('/second-auth.html');
-    res.redirect('/login.html');
+// --- MIDDLEWARE PHÂN QUYỀN ---
+const authorize = (roles) => {
+    return (req, res, next) => {
+        if (req.session.user && roles.includes(req.session.user.role)) {
+            return next();
+        }
+        res.redirect('/login.html');
+    };
 };
 
 app.use(express.static('public'));
-app.use('/private', authAdmin, express.static('private'));
 
-// --- ROUTES ---
+// 3. Cấu hình đường dẫn cho thư mục PRIVATE
+app.get('/private/quan-ly.html', authorize(['admin']), (req, res) => {
+    res.sendFile(path.join(__dirname, 'private', 'quan-ly.html'));
+});
 
-app.post('/api/login', (req, res) => {
-    // Hỗ trợ username + password; fallback mặc định nếu .env không có
-    const adminUser = process.env.ADMIN_USER || 'admin';
-    const adminPass = process.env.ADMIN_PASS || '666888';
+app.get('/private/bep-bar.html', authorize(['admin', 'kitchen']), (req, res) => {
+    res.sendFile(path.join(__dirname, 'private', 'bep-bar.html'));
+});
+
+app.get('/private/nhan-vien.html', authorize(['admin', 'staff']), (req, res) => {
+    res.sendFile(path.join(__dirname, 'private', 'nhan-vien.html'));
+});
+
+app.use('/private', (req, res, next) => {
+    if(req.session.user) next(); else res.redirect('/login.html');
+}, express.static('private'));
+
+
+// --- ROUTES API ---
+
+// Đăng nhập
+app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
-
-    if (username === adminUser && password === adminPass) {
-        // Gán quyền quản trị tạm thời; yêu cầu bước 2
-        req.session.isAdmin = true;
-        req.session.passedSecondAuth = false;
-        return res.json({ success: true, needSecond: true });
-    }
-    res.json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu!' });
-});
-
-// Second-step password verification
-app.post('/api/second-auth', (req, res) => {
-    const provided = req.body.password;
-    const second = process.env.SECOND_PASS || '123456AZ';
-    if (!req.session.isAdmin) return res.status(401).json({ success: false, message: 'Chưa đăng nhập.' });
-    if (provided === second) {
-        req.session.passedSecondAuth = true;
-        return res.json({ success: true });
-    }
-    return res.json({ success: false, message: 'Mật khẩu bước 2 không đúng.' });
-});
-
-// Xác minh mã 2FA (TOTP)
-app.post('/api/2fa/verify', async (req, res) => {
     try {
-        const { token } = req.body;
-        if (!req.session.pendingAdmin) return res.json({ success: false, message: 'Không có yêu cầu xác thực.' });
-        const secret = process.env.ADMIN_2FA_SECRET;
-        if (!secret) return res.status(500).json({ success: false, message: '2FA chưa được cấu hình trên server.' });
-
-        const verified = speakeasy.totp.verify({ secret, encoding: 'base32', token, window: 1 });
-        if (verified) {
-            req.session.isAdmin = true;
-            req.session.is2fa = true;
-            req.session.pendingAdmin = false;
-            return res.json({ success: true });
+        const user = await Account.findOne({ username, password });
+        if (user) {
+            req.session.user = {
+                id: user._id,
+                username: user.username,
+                role: user.role
+            };
+            return res.json({ success: true, role: user.role });
         }
-        return res.json({ success: false, message: 'Mã 2FA không hợp lệ.' });
-    } catch (err) { console.error(err); res.status(500).json({ success: false }); }
+        res.json({ success: false, message: 'Sai tên đăng nhập hoặc mật khẩu!' });
+    } catch (err) {
+        res.status(500).json({ success: false, message: 'Lỗi server' });
+    }
 });
 
-// API cho Khách (Chỉ hiện Nước)
+// Đăng xuất
+app.get('/api/logout', (req, res) => {
+    req.session.destroy();
+    res.redirect('/login.html');
+});
+
+// Tạo tài khoản (Chỉ Admin)
+app.post('/api/admin/create-account', authorize(['admin']), async (req, res) => {
+    try {
+        const { username, password, role, fullName } = req.body;
+        const exist = await Account.findOne({ username });
+        if (exist) return res.json({ success: false, message: 'Tài khoản đã tồn tại!' });
+
+        const newAcc = new Account({ username, password, role, fullName });
+        await newAcc.save();
+        res.json({ success: true, message: 'Tạo tài khoản thành công!' });
+    } catch (err) {
+        res.status(500).json({ success: false });
+    }
+});
+
+// API Lấy sản phẩm cho khách
 app.get('/api/products', async (req, res) => {
     try {
-        // [CẬP NHẬT] Dùng $in để lấy cả 'Drink' và 'Snack'
         const products = await Product.find({ 
             isVisible: true, 
             category: { $in: ['Drink', 'Snack'] } 
@@ -102,91 +133,87 @@ app.get('/api/products', async (req, res) => {
         res.json(products);
     } catch (err) { res.status(500).send(err.message); }
 });
-// API cho Admin (Hiện Tất cả - ĐỂ QUẢN LÝ MENU)
-app.get('/api/admin/products', authAdmin, async (req, res) => {
+
+// API Lấy sản phẩm cho Admin Thêm 'staff' vào mảng phân quyền
+
+app.get('/api/admin/products', authorize(['admin', 'staff']), async (req, res) => {
     try {
         const products = await Product.find({});
         res.json(products);
     } catch (err) { res.status(500).send(err.message); }
 });
 
-app.get('/api/orders/pending/:table', authAdmin, async (req, res) => {
+// API Đơn hàng pending theo bàn
+app.get('/api/orders/pending/:table', authorize(['admin', 'staff']), async (req, res) => {
     try {
         const order = await Order.findOne({ tableNumber: req.params.table, status: 'pending' });
         res.json(order || null);
     } catch (err) { res.status(500).send(err.message); }
 });
 
-app.get('/api/orders/pending-all', authAdmin, async (req, res) => {
+// API Tất cả đơn pending (cho bếp)
+app.get('/api/orders/pending-all', authorize(['admin', 'kitchen', 'staff']), async (req, res) => {
     try {
         const orders = await Order.find({ status: 'pending', isTakeAway: false });
         res.json(orders);
     } catch (err) { res.status(500).send(err.message); }
 });
 
-app.post('/api/products', authAdmin, upload.single('image'), async (req, res) => {
+// API Thêm/Sửa món
+app.post('/api/products', authorize(['admin']), upload.single('image'), async (req, res) => {
     try {
         const { id, name, price, category } = req.body;
         const image = req.file ? `/uploads/${req.file.filename}` : undefined;
 
         if (id) {
-            // [LOGIC SỬA] Nếu có ID gửi lên -> Cập nhật
             const updateData = { name, price, category };
-            if (image) updateData.image = image; // Chỉ cập nhật ảnh nếu user chọn ảnh mới
+            if (image) updateData.image = image;
             await Product.findByIdAndUpdate(id, updateData);
         } else {
-            // [LOGIC THÊM] Nếu không có ID -> Tạo mới
             const newProduct = new Product({ name, price, image: image || '', category });
             await newProduct.save();
         }
         res.redirect('/private/quan-ly.html');
     } catch (err) { res.status(500).send(err.message); }
 });
-app.get('/api/stats/revenue', authAdmin, async (req, res) => {
+
+// API Thống kê doanh thu
+app.get('/api/stats/revenue', authorize(['admin']), async (req, res) => {
     try {
         const { type, year, month } = req.query; 
-        // type: 'daily' (ngày trong tháng), 'monthly' (tháng trong năm), 'yearly' (các năm)
-        
-        let matchStage = { status: 'paid' }; // Chỉ tính đơn đã thanh toán
+        let matchStage = { status: 'paid' };
         let groupStage = {};
         
         const currYear = parseInt(year) || new Date().getFullYear();
         const currMonth = parseInt(month) || new Date().getMonth() + 1;
 
         if (type === 'daily') {
-            // Lọc từ ngày 1 đến ngày cuối tháng
             const start = new Date(currYear, currMonth - 1, 1);
-            const end = new Date(currYear, currMonth, 0, 23, 59, 59); // Ngày cuối tháng
+            const end = new Date(currYear, currMonth, 0, 23, 59, 59);
             matchStage.createdAt = { $gte: start, $lte: end };
-            
-            // Gom nhóm theo ngày (1-31)
             groupStage = { _id: { $dayOfMonth: "$createdAt" }, total: { $sum: "$totalAmount" } };
         } 
         else if (type === 'monthly') {
-            // Lọc cả năm
             const start = new Date(currYear, 0, 1);
             const end = new Date(currYear, 11, 31, 23, 59, 59);
             matchStage.createdAt = { $gte: start, $lte: end };
-            
-            // Gom nhóm theo tháng (1-12)
             groupStage = { _id: { $month: "$createdAt" }, total: { $sum: "$totalAmount" } };
         } 
         else if (type === 'yearly') {
-            // Gom nhóm theo năm
             groupStage = { _id: { $year: "$createdAt" }, total: { $sum: "$totalAmount" } };
         }
 
         const data = await Order.aggregate([
             { $match: matchStage },
             { $group: groupStage },
-            { $sort: { _id: 1 } } // Sắp xếp theo thời gian tăng dần
+            { $sort: { _id: 1 } }
         ]);
-        
         res.json(data);
     } catch (err) { res.status(500).send(err.message); }
 });
 
-app.post('/api/products/toggle/:id', authAdmin, async (req, res) => {
+// API Ẩn/Hiện món
+app.post('/api/products/toggle/:id', authorize(['admin']), async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
         if (product) {
@@ -197,76 +224,66 @@ app.post('/api/products/toggle/:id', authAdmin, async (req, res) => {
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
-app.delete('/api/products/:id', authAdmin, async (req, res) => {
+// API Xóa món
+app.delete('/api/products/:id', authorize(['admin']), async (req, res) => {
     try {
         await Product.findByIdAndDelete(req.params.id);
         res.json({ success: true });
     } catch (err) { res.status(500).json({ success: false }); }
 });
 
+// API Lịch sử đơn
+app.get('/api/orders/history', authorize(['admin']), async (req, res) => {
+    try {
+        const orders = await Order.find({ status: 'paid' }).sort({ createdAt: -1 }).limit(50);
+        res.json(orders);
+    } catch (err) { res.status(500).send(err.message); }
+});
+
 // --- SOCKET.IO ---
 io.on('connection', (socket) => {
     socket.on('send_order', async (data) => {
         try {
-            // [CẬP NHẬT] Chuẩn hóa: Nếu là Mang Về thì gán Bàn = "0"
-            if (data.isTakeAway) {
-                data.tableNumber = "0";
-            }
-
-            // Luôn tìm đơn đang chờ của bàn đó (kể cả bàn 0) để cộng dồn
+            if (data.isTakeAway) data.tableNumber = "0";
             let order = await Order.findOne({ tableNumber: data.tableNumber, status: 'pending' });
 
             if (order) {
-                // Đã có đơn -> Cộng dồn món
                 data.items.forEach(newItem => {
                     const exist = order.items.find(i => i.productName === newItem.productName);
                     if (exist) exist.quantity += newItem.quantity;
                     else order.items.push(newItem);
                 });
-                
-                // Lọc bỏ món có số lượng <= 0
                 order.items = order.items.filter(i => i.quantity > 0);
-                
-                // Nếu xóa hết món thì xóa luôn đơn
                 if (order.items.length === 0) {
                     await Order.findByIdAndDelete(order._id);
-                    // Gửi tín hiệu xóa về client
                     order = { _id: order._id, tableNumber: data.tableNumber, status: 'deleted', items: [] };
                 } else {
-                    // Tính lại tổng tiền
                     order.totalAmount = order.items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
-                    // Cập nhật ghi chú nếu có
                     if (data.notes) order.notes = data.notes;
                     await order.save();
                 }
             } else {
-                // Chưa có đơn -> Tạo mới
                 if (data.items.length > 0) {
                     const realTotal = data.items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
                     order = new Order({
-                        tableNumber: data.tableNumber, // Lúc này đã là "0" nếu là mang về
+                        tableNumber: data.tableNumber,
                         items: data.items,
                         totalAmount: realTotal,
-                        notes: data.notes || '', // Lưu ghi chú khách hàng
+                        notes: data.notes || '',
                         isTakeAway: data.isTakeAway,
                         status: 'pending'
                     });
                     await order.save();
                 }
             }
-            
-            // Gửi cập nhật cho Admin
             if(order) io.emit('new_order_to_admin', order);
-            
         } catch (e) { console.error(e); }
     });
 
     socket.on('pay_order', async (data) => {
         try {
-            // [QUAN TRỌNG] Khi thanh toán, Server tìm đúng bàn "0" hoặc bàn số để update
             const update = { status: 'paid', paidAt: new Date() };
             if (data.invoiceCode) update.invoiceCode = data.invoiceCode;
-            // Nếu admin thêm ghi chú thì cập nhật notes
             if (data.notes) update.notes = data.notes;
 
             const order = await Order.findOneAndUpdate(
@@ -274,21 +291,27 @@ io.on('connection', (socket) => {
                 update,
                 { new: true }
             );
-            if (order) {
-                io.emit('order_paid_success', order);
-            }
+            if (order) io.emit('order_paid_success', order);
         } catch (e) { console.error(e); }
     });
 });
-app.get('/api/orders/history', authAdmin, async (req, res) => {
+
+// Seed Admin Mặc định
+const seedAdmin = async () => {
     try {
-        // Lấy 50 đơn gần nhất đã thanh toán, sắp xếp mới nhất lên đầu
-        const orders = await Order.find({ status: 'paid' })
-            .sort({ createdAt: -1 })
-            .limit(50);
-        res.json(orders);
-    } catch (err) { res.status(500).send(err.message); }
-});
+        const adminExists = await Account.findOne({ role: 'admin' });
+        if (!adminExists) {
+            await Account.create({
+                username: 'admin',
+                password: '123',
+                role: 'admin',
+                fullName: 'Quản trị viên'
+            });
+            console.log('✅ Đã tạo tài khoản admin mặc định: admin / 123');
+        }
+    } catch (err) { console.error('Lỗi seed admin:', err); }
+};
+seedAdmin();
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`🚀 Server chạy tại http://localhost:${PORT}`));
