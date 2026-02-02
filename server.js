@@ -170,17 +170,16 @@ app.get('/api/orders/pending/:table', authorize(['admin', 'staff']), async (req,
 });
 
 // API Tất cả đơn cho bếp (Lấy cả đơn chưa thanh toán VÀ đơn đã thanh toán nhưng chưa làm xong)
+// API Tất cả đơn hàng đang chờ xử lý (chưa thanh toán)
 app.get('/api/orders/pending-all', authorize(['admin', 'kitchen', 'staff']), async (req, res) => {
     try {
-        // Lấy các đơn chưa được đánh dấu là xong việc ở bếp (kitchenDone khác true)
+        // Lấy tất cả các đơn hàng có trạng thái 'pending' (chưa thanh toán)
         const orders = await Order.find({ 
-            kitchenDone: { $ne: true }, 
-            isTakeAway: false 
+            status: 'pending' 
         });
         res.json(orders);
     } catch (err) { res.status(500).send(err.message); }
 });
-
 // API Thêm/Sửa món
 app.post('/api/products', authorize(['admin']), upload.single('image'), async (req, res) => {
     try {

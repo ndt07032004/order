@@ -177,24 +177,26 @@
 
     <div id="kitchen-grid" class="grid"></div>
 
-    <audio id="alert-sound" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" preload="auto"></audio>
+    <audio id="alert-sound" src="/assets/audio/beep.mp3" preload="auto"></audio>
     <div id="print-kitchen-area"></div>
 
     <script>
         const socket = io();
+        const alertSound = document.getElementById('alert-sound'); // Lấy một lần ở đây
 
         // [CẬP NHẬT] Hàm xử lý âm thanh không hiện Alert nữa
         function unlockAudio() {
-            const sound = document.getElementById('alert-sound');
             // Thử phát âm thanh
-            sound.play().catch(() => {
-                // Nếu lỗi (do trình duyệt chặn) thì kệ nó, không alert gì cả
-                console.log("Autoplay prevented silently.");
-            });
-            
-            // Dừng ngay để chỉ lấy quyền AudioContext
-            sound.pause();
-            sound.currentTime = 0;
+            if (alertSound) {
+                alertSound.play().catch(() => {
+                    // Nếu lỗi (do trình duyệt chặn) thì kệ nó, không alert gì cả
+                    console.log("Autoplay prevented silently.");
+                });
+                
+                // Dừng ngay để chỉ lấy quyền AudioContext
+                alertSound.pause();
+                alertSound.currentTime = 0;
+            }
             
             // Luôn ẩn màn hình chờ
             document.getElementById('sound-overlay').style.display = 'none';
@@ -205,17 +207,30 @@
         }, 1000);
 
         fetch('/api/orders/pending-all')
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) {
+                    throw new Error(`Lỗi HTTP! trạng thái: ${res.status}`);
+                }
+                return res.json();
+            })
             .then(orders => {
                 orders.forEach(renderOrder);
+            })
+            .catch(error => {
+                console.error("Lỗi khi lấy đơn hàng đang chờ:", error);
+                const grid = document.getElementById('kitchen-grid');
+                if (grid) {
+                    grid.innerHTML = '<p style="text-align:center; color:var(--text-sub); margin-top:50px;">Không thể tải đơn hàng. Vui lòng kiểm tra kết nối hoặc thử lại.</p>';
+                }
             });
 
         socket.on('new_order_to_admin', (order) => {
             // [CẬP NHẬT] Hiện tất cả đơn (bao gồm Mang về)
             if (order.status === 'pending') {
-                const sound = document.getElementById('alert-sound');
-                sound.currentTime = 0;
-                sound.play().catch(e => console.log("Audio blocked:", e));
+                if (alertSound) {
+                    alertSound.currentTime = 0;
+                    alertSound.play().catch(e => console.log("Audio blocked:", e));
+                }
                 renderOrder(order);
             } else {
                 const existing = document.getElementById(`kitchen-order-${order._id}`);
@@ -225,17 +240,16 @@
 
         // [SỬA LẠI] Khi nhận tín hiệu thanh toán thành công
         socket.on('order_paid_success', (order) => {
-            console.log("Đơn đã thanh toán:", order); // Để debug xem có nhận được không
+            // Loại bỏ console.log("Đơn đã thanh toán:", order);
             
             // Gọi lại hàm renderOrder. 
             // Hàm này đã có sẵn logic: Xóa thẻ cũ -> Vẽ thẻ mới có chữ "ĐÃ TT" màu xanh
             renderOrder(order); 
             
             // Phát âm thanh thông báo (nếu muốn bếp chú ý)
-            const sound = document.getElementById('alert-sound');
-            if(sound) {
-                sound.currentTime = 0;
-                sound.play().catch(e => console.log(e));
+            if(alertSound) {
+                alertSound.currentTime = 0;
+                alertSound.play().catch(e => console.log(e));
             }
         });
 
