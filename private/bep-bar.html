@@ -223,25 +223,53 @@
             }
         });
 
+        // [SỬA LẠI] Khi nhận tín hiệu thanh toán thành công
         socket.on('order_paid_success', (order) => {
-            const existing = document.getElementById(`kitchen-order-${order._id}`);
-            if (existing) existing.remove();
+            console.log("Đơn đã thanh toán:", order); // Để debug xem có nhận được không
+            
+            // Gọi lại hàm renderOrder. 
+            // Hàm này đã có sẵn logic: Xóa thẻ cũ -> Vẽ thẻ mới có chữ "ĐÃ TT" màu xanh
+            renderOrder(order); 
+            
+            // Phát âm thanh thông báo (nếu muốn bếp chú ý)
+            const sound = document.getElementById('alert-sound');
+            if(sound) {
+                sound.currentTime = 0;
+                sound.play().catch(e => console.log(e));
+            }
         });
 
         function renderOrder(order) {
+            // Xóa card cũ nếu đã tồn tại để cập nhật lại (tránh trùng lặp)
             const existing = document.getElementById(`kitchen-order-${order._id}`);
             if (existing) existing.remove();
 
-            // Xử lý tên bàn hiển thị
+            // --- [SỬA 1] Logic kiểm tra trạng thái thanh toán ---
+            const isPaid = order.status === 'paid'; // Kiểm tra xem đơn đã trả tiền chưa
+            
+            // Tạo nhãn "ĐÃ THANH TOÁN" màu xanh lá
+            const paymentBadge = isPaid 
+                ? `<span style="background:#48BB78; color:white; font-size:0.7rem; padding:2px 6px; border-radius:4px; margin-left:10px; vertical-align:middle; display:inline-block; border:1px solid white;">ĐÃ TT</span>` 
+                : '';
+
+            // --- [SỬA 2] Xử lý Class và Tên bàn ---
             const isTakeAway = order.tableNumber == '0';
-            const tName = isTakeAway ? `<i class="fa-solid fa-bag-shopping"></i> MANG VỀ` : `BÀN ${order.tableNumber}`;
-            const cardClass = isTakeAway ? 'order-card takeaway' : 'order-card';
+            
+            // Thêm class 'paid' nếu đã thanh toán để CSS nếu cần
+            let cardClass = isTakeAway ? 'order-card takeaway' : 'order-card';
+            if (isPaid) cardClass += ' paid'; 
+
+            // Gắn badge vào tên bàn
+            const tName = isTakeAway 
+                ? `<i class="fa-solid fa-bag-shopping"></i> MANG VỀ ${paymentBadge}` 
+                : `BÀN ${order.tableNumber} ${paymentBadge}`;
+            // ----------------------------------------------------
 
             const timeStr = new Date(order.createdAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             const notesHtml = order.notes ? `<div class="notes"><i class="fa-solid fa-note-sticky"></i> <span>${order.notes}</span></div>` : '';
             
             const html = `
-                <div id="kitchen-order-${order._id}" class="${cardClass}">
+                <div id="kitchen-order-${order._id}" class="${cardClass}" ${isPaid ? 'style="border-left-color: #48BB78;"' : ''}>
                     <div class="card-header">
                         <div>
                             <div class="table-name">${tName}</div>
@@ -267,7 +295,8 @@
                         <button class="btn btn-print" onclick="printKitchen('${order._id}')">
                             <i class="fa-solid fa-print"></i> IN
                         </button>
-                        <button class="btn btn-done" onclick="this.closest('.order-card').remove()">
+                        
+                        <button class="btn btn-done" onclick="finishOrder('${order._id}')">
                             XONG <i class="fa-solid fa-check"></i>
                         </button>
                     </div>
@@ -300,6 +329,26 @@
             `;
             window.print();
         }
+        // [THÊM MỚI] Hàm gửi tín hiệu đã làm xong lên server
+        function finishOrder(orderId) {
+            // Hiệu ứng mờ đi để biết đang xử lý
+            const card = document.getElementById(`kitchen-order-${orderId}`);
+            if(card) card.style.opacity = '0.5';
+            
+            // Gửi socket lên server
+            socket.emit('kitchen_finish', { orderId: orderId });
+        }
+
+        // [THÊM MỚI] Server xác nhận đã xong -> Xóa khỏi màn hình
+        socket.on('kitchen_finish_success', (order) => {
+            const existing = document.getElementById(`kitchen-order-${order._id}`);
+            if (existing) {
+                // Hiệu ứng slide out trước khi xóa
+                existing.style.transform = 'translateX(100%)';
+                existing.style.transition = '0.3s';
+                setTimeout(() => existing.remove(), 300);
+            }
+        });
     </script>
 </body>
 </html>

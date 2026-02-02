@@ -45,12 +45,31 @@ app.use((req, res, next) => {
     next();
 });
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, 'public/uploads/'),
-    filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
-});
-const upload = multer({ storage });
+// const storage = multer.diskStorage({
+//     destination: (req, file, cb) => cb(null, 'public/uploads/'),
+//     filename: (req, file, cb) => cb(null, Date.now() + path.extname(file.originalname))
+// });
+// const upload = multer({ storage });
+// --- Code mới (THÊM VÀO) ---
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
+// Cấu hình Cloudinary (Lấy từ Dashboard của Cloudinary)
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'order-app-menu', // Tên thư mục trên Cloudinary
+        allowed_formats: ['jpg', 'png', 'jpeg', 'webp'],
+    },
+});
+
+const upload = multer({ storage: storage });
 // --- MIDDLEWARE PHÂN QUYỀN ---
 const authorize = (roles) => {
     return (req, res, next) => {
@@ -134,8 +153,7 @@ app.get('/api/products', async (req, res) => {
     } catch (err) { res.status(500).send(err.message); }
 });
 
-// API Lấy sản phẩm cho Admin Thêm 'staff' vào mảng phân quyền
-
+// API Lấy sản phẩm cho Admin
 app.get('/api/admin/products', authorize(['admin', 'staff']), async (req, res) => {
     try {
         const products = await Product.find({});
@@ -151,10 +169,14 @@ app.get('/api/orders/pending/:table', authorize(['admin', 'staff']), async (req,
     } catch (err) { res.status(500).send(err.message); }
 });
 
-// API Tất cả đơn pending (cho bếp)
+// API Tất cả đơn cho bếp (Lấy cả đơn chưa thanh toán VÀ đơn đã thanh toán nhưng chưa làm xong)
 app.get('/api/orders/pending-all', authorize(['admin', 'kitchen', 'staff']), async (req, res) => {
     try {
-        const orders = await Order.find({ status: 'pending', isTakeAway: false });
+        // Lấy các đơn chưa được đánh dấu là xong việc ở bếp (kitchenDone khác true)
+        const orders = await Order.find({ 
+            kitchenDone: { $ne: true }, 
+            isTakeAway: false 
+        });
         res.json(orders);
     } catch (err) { res.status(500).send(err.message); }
 });
@@ -163,8 +185,8 @@ app.get('/api/orders/pending-all', authorize(['admin', 'kitchen', 'staff']), asy
 app.post('/api/products', authorize(['admin']), upload.single('image'), async (req, res) => {
     try {
         const { id, name, price, category } = req.body;
-        const image = req.file ? `/uploads/${req.file.filename}` : undefined;
-
+        // const image = req.file ? `/uploads/${req.file.filename}` : undefined;
+        const image = req.file ? req.file.path : undefined;
         if (id) {
             const updateData = { name, price, category };
             if (image) updateData.image = image;
@@ -242,6 +264,8 @@ app.get('/api/orders/history', authorize(['admin']), async (req, res) => {
 
 // --- SOCKET.IO ---
 io.on('connection', (socket) => {
+    
+    // 1. Gửi đơn hàng
     socket.on('send_order', async (data) => {
         try {
             if (data.isTakeAway) data.tableNumber = "0";
@@ -271,7 +295,8 @@ io.on('connection', (socket) => {
                         totalAmount: realTotal,
                         notes: data.notes || '',
                         isTakeAway: data.isTakeAway,
-                        status: 'pending'
+                        status: 'pending',
+                        kitchenDone: false
                     });
                     await order.save();
                 }
@@ -280,6 +305,7 @@ io.on('connection', (socket) => {
         } catch (e) { console.error(e); }
     });
 
+    // 2. Thanh toán
     socket.on('pay_order', async (data) => {
         try {
             const update = { status: 'paid', paidAt: new Date() };
@@ -294,7 +320,20 @@ io.on('connection', (socket) => {
             if (order) io.emit('order_paid_success', order);
         } catch (e) { console.error(e); }
     });
-});
+
+    // 3. Bếp báo đã làm xong món (Đã được đưa vào đúng chỗ)
+    socket.on('kitchen_finish', async (data) => {
+        try {
+            const order = await Order.findByIdAndUpdate(
+                data.orderId,
+                { kitchenDone: true }, 
+                { new: true }
+            );
+            if (order) io.emit('kitchen_finish_success', order);
+        } catch (e) { console.error(e); }
+    });
+
+}); // <--- Kết thúc khối io.on ở đây là đúng
 
 // Seed Admin Mặc định
 const seedAdmin = async () => {

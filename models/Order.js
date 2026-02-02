@@ -14,7 +14,8 @@ const OrderSchema = new mongoose.Schema({
     status: { type: String, enum: ['pending', 'paid'], default: 'pending' },
     isTakeAway: { type: Boolean, default: false },
     notes: { type: String, default: '' }, // Ghi chú từ khách
-    createdAt: { type: Date, default: Date.now }
+    createdAt: { type: Date, default: Date.now },
+    kitchenDone: { type: Boolean, default: false }
 });
 
 module.exports = mongoose.model('Order', OrderSchema);
